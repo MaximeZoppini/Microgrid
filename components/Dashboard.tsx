@@ -1,15 +1,19 @@
 'use client';
 
 import type { MicrogridState } from '@/lib/simulation';
+import type { ScadaState } from '@/lib/scada';
 
 interface Props {
-  state: MicrogridState;
+  state: MicrogridState & { scada?: ScadaState };
   onFault: (target: string, severity?: 'partial' | 'total') => void;
   onClearFaults: () => void;
   onSetSpeed: (speed: number) => void;
   isRunning: boolean;
   onToggleRun: () => void;
+  onScadaFault: () => void;
+  onScadaRestore: () => void;
 }
+
 
 const FAULT_BUTTONS = [
   { id: 'solar',           label: '☀️ Panne solaire (−65%)',    severity: 'partial' as const, color: 'amber' },
@@ -62,12 +66,15 @@ function MetricCard({ icon, label, value, sub, color }:
   );
 }
 
-export default function Dashboard({ state, onFault, onClearFaults, onSetSpeed, isRunning, onToggleRun }: Props) {
+export default function Dashboard({ state, onFault, onClearFaults, onSetSpeed, isRunning, onToggleRun, onScadaFault, onScadaRestore }: Props) {
   const dt    = new Date(state.simulatedDate);
   const dow   = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][dt.getDay()];
   const dateStr = `${dow} ${dt.toLocaleDateString('fr-FR')} ${dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 
-  const freqColor = Math.abs(state.frequencyHz - 50) > 0.1 ? 'text-red-400' : 'text-green-400';
+  const freqColor    = Math.abs(state.frequencyHz - 50) > 0.1 ? 'text-red-400' : 'text-green-400';
+  const scada        = state.scada;
+  const isAutonomous = scada?.mode === 'autonomous';
+  const hqConnected  = scada?.hqConnected ?? true;
 
   return (
     <div className="flex flex-col gap-3 h-full overflow-y-auto text-white">
@@ -178,13 +185,87 @@ export default function Dashboard({ state, onFault, onClearFaults, onSetSpeed, i
 
       {/* ── Optimizer log ────────────────────────────────────────────────── */}
       <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
-        <p className="text-[9px] text-cyan-400/60 font-mono tracking-widest mb-1">OPTIMISEUR</p>
+        <p className="text-[9px] text-cyan-400/60 font-mono tracking-widest mb-1">OPTIMISEUR PRÉDICTIF</p>
         <p className="text-[10px] text-cyan-300 font-mono leading-relaxed">{state.optimizerLog}</p>
+        {scada?.forecast && (
+          <div className="mt-2 pt-2 border-t border-cyan-500/10 text-[9px] font-mono text-cyan-400/60 space-y-0.5">
+            <p>🎯 Cible SoC: <span className="text-cyan-300 font-bold">{scada.forecast.batteryTargetSoC}%</span></p>
+            <p>📈 Prévision 2h: +{scada.forecast.forecastSurplusKWh.toFixed(1)} kWh / −{scada.forecast.forecastDeficitKWh.toFixed(1)} kWh</p>
+            <p className="text-cyan-300/50">{scada.forecast.rationale.slice(0, 60)}{scada.forecast.rationale.length > 60 ? '…' : ''}</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── SCADA panel ─────────────────────────────────────────────────── */}
+      <div className={`rounded-xl border p-3 ${isAutonomous ? 'border-orange-500/40 bg-orange-500/5' : hqConnected ? 'border-indigo-500/20 bg-indigo-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+        <div className="flex items-center justify-between mb-2">
+          <p className={`text-[9px] font-mono tracking-widest ${isAutonomous ? 'text-orange-400/80' : 'text-indigo-400/60'}`}>
+            SCADA / MQTT
+          </p>
+          <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded ${
+            isAutonomous ? 'bg-orange-500/20 text-orange-400' :
+            hqConnected  ? 'bg-indigo-500/20 text-indigo-300' :
+                           'bg-red-500/20 text-red-400'}`}>
+            {isAutonomous ? '⚠ AUTONOME' : hqConnected ? '🟢 DISTANT' : '🔴 LIEN PERDU'}
+          </span>
+        </div>
+
+        {/* HQ link buttons */}
+        <div className="flex gap-1.5 mb-2">
+          <button
+            onClick={onScadaFault}
+            disabled={!hqConnected}
+            className="flex-1 px-2 py-1.5 rounded text-[10px] font-mono
+              bg-red-500/10 border border-red-500/30 text-red-400
+              hover:bg-red-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            📡 Couper lien HQ
+          </button>
+          <button
+            onClick={onScadaRestore}
+            disabled={hqConnected}
+            className="flex-1 px-2 py-1.5 rounded text-[10px] font-mono
+              bg-green-500/10 border border-green-500/30 text-green-400
+              hover:bg-green-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            🔗 Restaurer
+          </button>
+        </div>
+
+        {/* Box statuses */}
+        {scada && (
+          <div className="grid grid-cols-4 gap-1 mb-2">
+            {Object.entries(scada.boxes).map(([id, box]) => {
+              const c = box.status === 'online' ? 'text-green-400 border-green-500/30' :
+                        box.status === 'degraded' ? 'text-yellow-400 border-yellow-500/30' :
+                        'text-red-400 border-red-500/30';
+              return (
+                <div key={id} className={`rounded border px-1 py-0.5 text-center ${c}`}>
+                  <div className="text-[7px] font-mono leading-none">{id.slice(0,3).toUpperCase()}</div>
+                  <div className="text-[7px]">{box.status === 'online' ? '📡' : box.status === 'degraded' ? '⚠' : '✗'}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Message log */}
+        <p className="text-[8px] text-indigo-400/40 font-mono mb-1">DERNIERS ORDRES HQ→BOX</p>
+        <div className="space-y-0.5 max-h-28 overflow-y-auto">
+          {(scada?.messageLog ?? []).slice(0, 8).map((msg, i) => (
+            <div key={i} className="text-[8px] font-mono text-indigo-300/60 leading-tight truncate">
+              <span className="text-indigo-500/40">T{msg.ts.toString().slice(-3)}</span> {msg.label}
+            </div>
+          ))}
+          {!scada?.messageLog?.length && (
+            <p className="text-[8px] text-white/20 font-mono">Aucun message</p>
+          )}
+        </div>
       </div>
 
       {/* ── Fault injection ──────────────────────────────────────────────── */}
       <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3">
-        <p className="text-[9px] text-red-400/60 font-mono tracking-widest mb-2">INJECTION DE PANNES</p>
+        <p className="text-[9px] text-red-400/60 font-mono tracking-widest mb-2">INJECTION DE PANNES ASSET</p>
         <div className="space-y-1.5">
           {FAULT_BUTTONS.map((btn, i) => (
             <button key={i}
@@ -210,5 +291,6 @@ export default function Dashboard({ state, onFault, onClearFaults, onSetSpeed, i
       </div>
 
     </div>
+
   );
 }

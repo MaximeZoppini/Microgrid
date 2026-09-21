@@ -59,6 +59,26 @@ export default function Home() {
     setState(s);
   }, []);
 
+  const handleScadaFault = useCallback(async () => {
+    const r = await fetch('/api/scada', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'fault' }),
+    });
+    const { state: s } = await r.json();
+    setState(s);
+  }, []);
+
+  const handleScadaRestore = useCallback(async () => {
+    const r = await fetch('/api/scada', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'restore' }),
+    });
+    const { state: s } = await r.json();
+    setState(s);
+  }, []);
+
   const handleSetSpeed = useCallback((s: number) => {
     setSpeed(s);
     setState(prev => prev ? { ...prev, speedMultiplier: s } : prev);
@@ -163,6 +183,8 @@ export default function Home() {
             onSetSpeed={handleSetSpeed}
             isRunning={isRunning}
             onToggleRun={() => setRunning(r => !r)}
+            onScadaFault={handleScadaFault}
+            onScadaRestore={handleScadaRestore}
           />
         </div>
       </div>
@@ -201,6 +223,8 @@ export default function Home() {
             onSetSpeed={handleSetSpeed}
             isRunning={isRunning}
             onToggleRun={() => setRunning(r => !r)}
+            onScadaFault={handleScadaFault}
+            onScadaRestore={handleScadaRestore}
           />
         </div>
       </div>

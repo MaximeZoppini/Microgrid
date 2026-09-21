@@ -2,19 +2,22 @@
 
 import { useEffect, useRef } from 'react';
 import type { MicrogridState, PowerFlow } from '@/lib/simulation';
+import type { ScadaState } from '@/lib/scada';
 
 interface Props {
-  state: MicrogridState;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  state: MicrogridState & { scada?: ScadaState };
 }
 
 // ─── Couleurs par type de flux ────────────────────────────────────────────────
 const FLOW_COLOR: Record<PowerFlow['type'], string> = {
-  solar:   '#facc15',   // yellow
-  wind:    '#38bdf8',   // sky blue
-  battery: '#a78bfa',   // violet
-  diesel:  '#f97316',   // orange
-  grid:    '#6ee7b7',   // emerald
-  load:    '#94a3b8',   // slate
+  solar:   '#facc15',
+  wind:    '#38bdf8',
+  battery: '#a78bfa',
+  diesel:  '#f97316',
+  grid:    '#6ee7b7',
+  load:    '#94a3b8',
+  scada:   '#818cf8',
 };
 
 // ─── Pulse animation along an SVG path ───────────────────────────────────────
@@ -298,10 +301,100 @@ function BusBar({ x, y, balanceKW }: { x: number; y: number; balanceKW: number }
   );
 }
 
+// ─── Box overlay (one per asset) ─────────────────────────────────────────────
+
+function BoxOverlay({ x, y, assetId, box }: {
+  x: number; y: number; assetId: string;
+  box: import('@/lib/scada').BoxState | undefined;
+}) {
+  if (!box) return null;
+  const statusColor = box.status === 'online' ? '#4ade80' : box.status === 'degraded' ? '#facc15' : '#ef4444';
+  const label = assetId.slice(0, 3).toUpperCase();
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <rect x={0} y={0} width={32} height={16} rx={3}
+        fill="#0f172a" stroke={statusColor} strokeWidth={1} fillOpacity={0.9} />
+      <text x={4} y={11} fontSize={8} fill={statusColor} fontFamily="monospace" fontWeight="bold">
+        📡{label}
+      </text>
+      {box.status !== 'online' && (
+        <circle cx={28} cy={4} r={3} fill={statusColor}>
+          <animate attributeName="opacity" values="1;0.2;1" dur="0.6s" repeatCount="indefinite" />
+        </circle>
+      )}
+    </g>
+  );
+}
+
+// ─── Enterprise HQ bubble ─────────────────────────────────────────────────────
+
+function EnterpriseHQ({ x, y, scada }: {
+  x: number; y: number;
+  scada: import('@/lib/scada').ScadaState | undefined;
+}) {
+  const connected  = scada?.hqConnected ?? true;
+  const mode       = scada?.mode ?? 'remote';
+  const lastLog    = scada?.messageLog?.[0];
+  const borderColor = connected ? '#4f46e5' : '#dc2626';
+  const modeColor   = mode === 'autonomous' ? '#f97316' : '#818cf8';
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      {/* HQ box */}
+      <rect width={155} height={80} rx={6}
+        fill="#0d0d2b" stroke={borderColor} strokeWidth={1.5} fillOpacity={0.95} />
+      {/* Header */}
+      <rect width={155} height={18} rx={6} fill={connected ? '#1e1b4b' : '#450a0a'} />
+      <rect width={155} height={10} y={10} fill={connected ? '#1e1b4b' : '#450a0a'} />
+
+      {/* Title */}
+      <text x={8} y={12} fontSize={9} fill={borderColor} fontFamily="monospace" fontWeight="bold">
+        🏢 ENTERPRISE HQ
+      </text>
+
+      {/* Connection status */}
+      <g transform="translate(8,22)">
+        <circle cx={4} cy={4} r={3} fill={connected ? '#4ade80' : '#ef4444'}>
+          {connected && <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />}
+        </circle>
+        <text x={12} y={8} fontSize={8} fill={connected ? '#4ade80' : '#ef4444'} fontFamily="monospace">
+          {connected ? 'LIEN SCADA ACTIF' : 'LIEN PERDU'}
+        </text>
+      </g>
+
+      {/* Mode */}
+      <text x={8} y={44} fontSize={8} fill={modeColor} fontFamily="monospace" fontWeight="bold">
+        MODE: {mode.toUpperCase()}
+      </text>
+
+      {/* Last order */}
+      {lastLog && (
+        <text x={8} y={56} fontSize={7} fill="#6366f1" fontFamily="monospace">
+          {lastLog.label.slice(0, 26)}{lastLog.label.length > 26 ? '…' : ''}
+        </text>
+      )}
+
+      {/* Forecast hint */}
+      {scada?.forecast && (
+        <text x={8} y={70} fontSize={7} fill="#4f46e5" fontFamily="monospace">
+          🎯 Cible batterie: {scada.forecast.batteryTargetSoC}% SoC
+        </text>
+      )}
+
+      {/* Geographic distance indicator */}
+      <text x={157} y={40} fontSize={8} fill="#312e81" fontFamily="monospace">╌╌╌</text>
+      <text x={157} y={50} fontSize={7} fill="#312e81" fontFamily="monospace" fontStyle="italic">
+        ~800 km
+      </text>
+    </g>
+  );
+}
+
 // ─── Main island SVG ─────────────────────────────────────────────────────────
 
 export default function IslandSVG({ state }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+
 
   // Minimal re-render trigger via RAF for smooth animations
   useEffect(() => {
@@ -312,6 +405,9 @@ export default function IslandSVG({ state }: Props) {
   }, []);
 
   const { solar, wind, battery, diesel, grid, loads, flows, weather, balanceKW } = state;
+  const scada = state.scada;
+  const isAutonomous = scada?.mode === 'autonomous';
+  const hqConnected  = scada?.hqConnected ?? true;
 
   return (
     <svg
@@ -351,7 +447,6 @@ export default function IslandSVG({ state }: Props) {
         stroke="#2d5a3d"
         strokeWidth={2}
       />
-      {/* Inner terrain variation */}
       <path
         d="M 130,280 C 140,200 220,140 330,130 C 420,122 520,140 610,175
            C 680,200 730,250 740,310 C 750,370 720,420 670,450
@@ -363,35 +458,50 @@ export default function IslandSVG({ state }: Props) {
 
       {/* ── Paths (define once, reuse) ────────────────────────────────────── */}
       <defs>
-        {/* Solar → Bus */}
-        <path id="path-solar-bus" d="M 195,170 Q 310,260 430,340" />
-        {/* Wind → Bus */}
-        <path id="path-wind-bus" d="M 660,155 Q 560,250 430,340" />
-        {/* Battery ↔ Bus */}
-        <path id="path-bat-bus"   d="M 390,305 L 430,340" />
-        <path id="path-bus-bat"   d="M 430,340 L 390,305" />
-        {/* Diesel → Bus */}
-        <path id="path-diesel-bus" d="M 530,290 L 430,340" />
-        {/* Grid ↔ Bus */}
-        <path id="path-grid-bus"  d="M 760,340 L 430,340" />
-        <path id="path-bus-grid"  d="M 430,340 L 760,340" />
-        {/* Bus → Loads */}
-        <path id="path-bus-hosp"  d="M 430,340 Q 320,390 210,450" />
-        <path id="path-bus-res"   d="M 430,340 L 420,490" />
-        <path id="path-bus-ind"   d="M 430,340 Q 525,390 620,445" />
+        <path id="path-solar-bus"   d="M 195,170 Q 310,260 430,340" />
+        <path id="path-wind-bus"    d="M 660,155 Q 560,250 430,340" />
+        <path id="path-bat-bus"     d="M 390,305 L 430,340" />
+        <path id="path-bus-bat"     d="M 430,340 L 390,305" />
+        <path id="path-diesel-bus"  d="M 530,290 L 430,340" />
+        <path id="path-grid-bus"    d="M 760,340 L 430,340" />
+        <path id="path-bus-grid"    d="M 430,340 L 760,340" />
+        <path id="path-bus-hosp"    d="M 430,340 Q 320,390 210,450" />
+        <path id="path-bus-res"     d="M 430,340 L 420,490" />
+        <path id="path-bus-ind"     d="M 430,340 Q 525,390 620,445" />
+        {/* SCADA data link: Enterprise HQ (top-left corner) → island bus */}
+        <path id="path-scada-link"
+          d="M 80,75 C 80,200 200,280 430,340" />
       </defs>
 
-      {/* ── Power line guides (always visible, dim) ────────────────────────── */}
+      {/* ── Power line guides (dim) ─────────────────────────────────────────── */}
       {['solar-bus','wind-bus','bat-bus','diesel-bus','grid-bus',
         'bus-hosp','bus-res','bus-ind'].map(id => (
         <use key={id} href={`#path-${id}`}
           stroke="#1e3a4a" strokeWidth={2} fill="none" />
       ))}
 
+      {/* SCADA link guide (dashed) */}
+      <use href="#path-scada-link"
+        stroke={hqConnected ? '#312e81' : '#450a0a'} strokeWidth={1.5}
+        strokeDasharray="6 4" fill="none" opacity={0.5} />
+
       {/* ── Active power flows ────────────────────────────────────────────── */}
-      {flows.map(flow => (
+      {flows.filter(f => f.type !== 'scada').map(flow => (
         <FlowPulse key={flow.id} flow={flow} pathId={`path-${flow.id}`} />
       ))}
+
+      {/* ── SCADA data link animation (separate from power) ──────────────── */}
+      {hqConnected && (
+        <>
+          <use href="#path-scada-link" stroke="#818cf8" strokeWidth={1.5}
+            strokeOpacity={0.2} fill="none" />
+          <use href="#path-scada-link" stroke="#818cf8" strokeWidth={2}
+            fill="none" strokeDasharray="5 18" strokeOpacity={0.8}>
+            <animate attributeName="stroke-dashoffset" from="0" to="-23"
+              dur="1.2s" repeatCount="indefinite" />
+          </use>
+        </>
+      )}
 
       {/* ── Components ───────────────────────────────────────────────────── */}
       <SolarFarm   x={190} y={120}  powerKW={solar.powerKW}   status={solar.status} />
@@ -401,12 +511,43 @@ export default function IslandSVG({ state }: Props) {
       <GridConnection x={760} y={310} importKW={grid.importKW} exportKW={grid.exportKW} status={grid.status} />
       <BusBar      x={430} y={340}  balanceKW={balanceKW} />
 
-      <LoadZone x={210} y={455} label="Hôpital"   icon="🏥" demandKW={loads.hospital.demandKW}    status={loads.hospital.status} />
+      <LoadZone x={210} y={455} label="Hôpital"    icon="🏥" demandKW={loads.hospital.demandKW}    status={loads.hospital.status} />
       <LoadZone x={420} y={490} label="Résidentiel" icon="🏘" demandKW={loads.residential.demandKW} status={loads.residential.status} />
       <LoadZone x={620} y={450} label="Industrie"  icon="🏭" demandKW={loads.industrial.demandKW}  status={loads.industrial.status} />
 
+      {/* ── Box overlays on each asset ──────────────────────────────────── */}
+      {scada && (
+        <>
+          <BoxOverlay x={225} y={92}  assetId="solar"       box={scada.boxes['solar']} />
+          <BoxOverlay x={686} y={72}  assetId="wind"        box={scada.boxes['wind']} />
+          <BoxOverlay x={406} y={252} assetId="battery"     box={scada.boxes['battery']} />
+          <BoxOverlay x={556} y={238} assetId="diesel"      box={scada.boxes['diesel']} />
+          <BoxOverlay x={790} y={284} assetId="grid"        box={scada.boxes['grid']} />
+          <BoxOverlay x={240} y={427} assetId="hospital"    box={scada.boxes['hospital']} />
+          <BoxOverlay x={450} y={463} assetId="residential" box={scada.boxes['residential']} />
+          <BoxOverlay x={650} y={422} assetId="industrial"  box={scada.boxes['industrial']} />
+        </>
+      )}
+
+      {/* ── Enterprise HQ bubble ─────────────────────────────────────────── */}
+      <EnterpriseHQ x={14} y={12} scada={scada} />
+
       {/* ── Weather overlay ───────────────────────────────────────────────── */}
       <WeatherOverlay weather={weather} />
+
+      {/* ── Autonomous mode banner ────────────────────────────────────────── */}
+      {isAutonomous && (
+        <g transform="translate(240,8)">
+          <rect width={440} height={26} rx={4}
+            fill="#451a03" stroke="#ea580c" strokeWidth={1.5} fillOpacity={0.95}>
+            <animate attributeName="stroke-opacity" values="1;0.4;1" dur="1s" repeatCount="indefinite" />
+          </rect>
+          <text x={220} y={17} textAnchor="middle" fontSize={11} fill="#fb923c"
+            fontFamily="monospace" fontWeight="bold">
+            ⚠ MODE AUTONOME — LIEN SCADA PERDU — BOXES EN MAINTIEN
+          </text>
+        </g>
+      )}
 
       {/* ── Legend ───────────────────────────────────────────────────────── */}
       <g transform="translate(12,530)">
@@ -416,7 +557,7 @@ export default function IslandSVG({ state }: Props) {
           { color: '#a78bfa', label: 'Batterie' },
           { color: '#f97316', label: 'Diesel' },
           { color: '#6ee7b7', label: 'Réseau' },
-          { color: '#94a3b8', label: 'Consomm.' },
+          { color: '#818cf8', label: 'SCADA' },
         ].map(({ color, label }, i) => (
           <g key={label} transform={`translate(${i * 130},0)`}>
             <line x1={0} y1={4} x2={20} y2={4} stroke={color} strokeWidth={3} />
@@ -427,7 +568,7 @@ export default function IslandSVG({ state }: Props) {
 
       {/* ── Fault alerts ─────────────────────────────────────────────────── */}
       {state.activeFaults.length > 0 && (
-        <g transform="translate(12,12)">
+        <g transform="translate(290,42)">
           <rect width={260} height={state.activeFaults.length * 18 + 12} rx={4}
             fill="#450a0a" stroke="#dc2626" strokeWidth={1.5} fillOpacity={0.9} />
           <text x={8} y={16} fontSize={11} fill="#ef4444" fontFamily="monospace" fontWeight="bold">
@@ -441,3 +582,4 @@ export default function IslandSVG({ state }: Props) {
     </svg>
   );
 }
+
